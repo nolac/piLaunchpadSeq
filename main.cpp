@@ -1,8 +1,12 @@
 #include <iostream>
+#include <signal.h>
 #include <string>
 #include <time.h>
 #include <vector>
+#include <thread>
 #include "RtMidi.h"
+#include "screen.hpp"
+#include "main_screen.hpp"
 using namespace std;
 
 void choosePortDevice(RtMidi *RtMidiPort){
@@ -25,44 +29,94 @@ void choosePortDevice(RtMidi *RtMidiPort){
 	}
 }
 
+vector<unsigned char> displayLed(unsigned char row,unsigned char col,Color c){
+	unsigned char ledAdress=16*row+col;
+	vector<unsigned char> message;
+	message.push_back(0x90);
+	message.push_back(ledAdress);
+	message.push_back(c);
+	return message;
+}
+
+bool done;
+static void finish(int ignore){ done = true; }
+
 int main(){
 	RtMidiIn *in=0;
+	RtMidiIn *controller=0;
 	RtMidiOut *out=0;
-
+	vector<unsigned char> allLedsOn = {0xB0,0x00,0x7E};
+	vector<unsigned char> allLedsOff = {0xB0,0x00,0x00};
+	vector<unsigned char> message;
 	try{
 		in=new RtMidiIn();
+		controller=new RtMidiIn();
 		out=new RtMidiOut();
-	}catch(RtMidiError e){
+	}catch(RtMidiError &e){
 		e.printMessage();
 	}
 	cout<<"select input port"<<endl;
 	choosePortDevice(in);
+	cout<<"select pad controller"<<endl;
+	choosePortDevice(controller);
 	cout<<"select output port"<<endl;
 	choosePortDevice(out);
-	bool isRunning=true;
-	int currentPosition=0;
-	time_t  oldTime=clock(),currentTime;
-	vector<unsigned char> message;
-	message.push_back(0xB0);
-	message.push_back(0x00);
-	message.push_back(0x00);
-	while(isRunning){
-		currentTime=clock();
-			if((currentTime-oldTime)/CLOCKS_PER_SEC>=1){
-				cout<<++currentPosition<<endl;
-				oldTime=currentTime;
-				out->sendMessage(&message);
-				message[1]++;
-
+	  
+	done = false;
+  	(void) signal(SIGINT, finish);
+	thread inputThread([in,&message,out](){
+		/*double stamp;
+		int nBytes;*/
+		vector<unsigned char> outMessage;
+		while (!done)
+		{
+			/*stamp=*/in->getMessage(&message);
+			//nBytes=message.size();
+			outMessage={};
+			for(unsigned char event : message){
+				out->sendMessage(&event,1);
 			}
-			if(currentPosition>=10){
-				message[2]=0;
-				out->sendMessage(&message);
-				isRunning=false;
-			}
+			
+		}
+		cout<<"exit programm";
+	});
 
-	}
+		
+	thread controllerThread([controller](){
+		vector<unsigned char> controllMessage;
+		//double stamp;
+		bool runs=false;
+		while(!done){
+			/*stamp=*/controller->getMessage(&controllMessage);
+			if(controllMessage.size()>0&&controllMessage[2]>0){
+				switch(controllMessage[1]){
+					case 0x78:
+						cout<<(runs?"stop":"play")<<endl;
+						runs=!runs;
+						break;
+					case 0x68:
+						cout<<"rec"<<endl;
+						runs=true;
+						break;
+					case 0x58:
+						cout<<"edit track"<<endl;
+						break;
+					case 0x48:
+						cout<<"patter mode"<<endl;
+						break;
+					default :
+						break;
+			}
+			}
+		}
+	});
+
+	
+	inputThread.join();
+	controllerThread.join();
+	
 	delete in;
+	delete controller;
 	delete out;
 	return 0;
 }
